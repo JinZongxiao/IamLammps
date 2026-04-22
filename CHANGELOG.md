@@ -4,6 +4,69 @@
 
 ---
 
+## [v4.9] — 2026-04-22
+
+### 重构：Tensile / Nanoindent / DBTT Workflow 全面确定性模板化
+
+**背景**
+
+v4.8 完成了 crack 的模板化重构，并在 pipeline 层引入了 `script_template` 旁路机制。本版本将同样的方案推广到剩余三个 pure-W builtin workflow。
+
+---
+
+**Tensile — 问题与修复**
+
+*问题*
+
+- `equilibrate`：LLM 生成的 `fix npt` Tdamp/Pdamp 参数写法不稳定（有时用分数、有时用整数、有时省略 coupling style）。
+- `deform`：`fix deform` 与 `fix npt` 联用时，LLM 经常把 `fix npt` 的作用维度写错（把拉伸轴也加入了 npt，导致双重控制冲突）；dump 文件名有时带 `*` 通配符、有时不带。
+
+*解决方案*
+
+三个 stage 全部改用 `script_template`：
+- Tdamp = `100 * dt`，Pdamp = `1000 * dt`，Python 层计算后写为 float 字面量
+- transverse axes 从 `deform_direction` 在 Python 中推导，`fix npt` 只作用于横向两轴
+- erate、nsteps 在 Python 层一次性计算，不再出现在提示词里
+
+---
+
+**Nanoindent — 问题与修复**
+
+*问题*
+
+- `equilibrate`：虽然之前已硬编码 z 边界，但脚本仍走 LLM 路径，retry 时 LLM 可能重写 pair_style 或 group 行。
+- `indent`：LLM 用 `region block ... 0.15*${lz}` 传入 region 参数，LAMMPS `region_block.cpp` 报 `Expected floating point parameter` 错误；indenter 位置变量的 equal-style 写法也不稳定。
+
+*解决方案*
+
+三个 stage 全部改用 `script_template`：
+- indenter 中心坐标 `lx/2, ly/2`、起始高度 `lz + R + 5.0`、压入深度 `0.1*lz`、nsteps 全部 Python 计算
+- indenter 位置用 `variable indenter_z equal {z_start:.6f}-{vel}*step*dt`（float 字面量起点，无 `${}` 嵌套）
+- group 边界 `z_fixed`/`z_thermo` 三个 stage 共享同一组数值
+
+---
+
+**DBTT — 自动受益**
+
+DBTT workflow 复用 `TensileWorkflow`，tensile 模板化后无需额外修改，10 个温度点（200K–1200K）× 3 stage = 30 次运行，全部 retry_count=0。
+
+---
+
+**修改文件**
+- `src/lammps_agent/workflows/tensile.py` — 完整重写，3 stage 全模板化
+- `src/lammps_agent/workflows/nanoindent.py` — 完整重写，3 stage 全模板化
+- `src/lammps_agent/report/tensile_reporter.py` — 修复 2 处 matplotlib 标签中文字符（`应力-应变` → `Stress-Strain`，`应力分量` → `stress component`）
+
+**验证**
+
+| Workflow | Smoke test | 所有 stage retry_count |
+|----------|-----------|----------------------|
+| tensile | 5×5×10, equil 500步, strain_rate 1e11 | 0 |
+| nanoindent | 5×5×10, default indenter params | 0 |
+| dbtt | 5×5×10, 10温度点, strain_rate 1e11 | 0（共30次运行） |
+
+---
+
 ## [v4.8] — 2026-04-22
 
 ### 重构：Crack Workflow 确定性模板化 + Pipeline script_template 旁路机制
