@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import random
+import sys
 
-from ..pipeline import PipelineStage, SimulationPipeline
+from ..pipeline import PipelineResult, PipelineStage, SimulationPipeline
 from ..potentials import PotentialManager
 from .base import BaseWorkflow, WorkflowConfig
 
@@ -18,10 +19,38 @@ class CrackWorkflow(BaseWorkflow):
         agent: "LammpsAgent",  # noqa: F821
         supercell: tuple[int, int, int] = (30, 15, 5),
         crack_length_fraction: float = 0.3,
+        dump_every: int | None = None,
+        dump_split: bool = False,   # False = single-file dump (default)
     ) -> None:
         super().__init__(config, agent)
         self.supercell = supercell
         self.crack_length_fraction = crack_length_fraction
+        self.dump_every = dump_every if dump_every is not None else config.dump_every
+        self.dump_split = dump_split
+
+    # Report config — set by main.py after construction
+    _report_config: "CrackReportConfig | None" = None  # type: ignore[name-defined]
+
+    def run(self) -> PipelineResult:
+        pipeline = self.build_pipeline()
+        result = pipeline.run()
+        if result.success:
+            self._try_generate_report(result)
+        return result
+
+    def _try_generate_report(self, result: PipelineResult) -> None:
+        try:
+            from ..report import CrackReporter, CrackReportConfig
+            cfg = self._report_config or CrackReportConfig(
+                supercell=self.supercell,
+                temperature=self.config.temperature,
+                potential_name=self.config.potential_name,
+                crack_length_fraction=self.crack_length_fraction,
+                lammps_command=self.agent.config.lammps_command,
+            )
+            CrackReporter(cfg).generate(result)
+        except Exception as exc:
+            print(f"[REPORT WARNING] Crack report failed: {exc}", file=sys.stderr)
 
     def build_pipeline(self) -> SimulationPipeline:
         stages = [
@@ -62,7 +91,7 @@ class CrackWorkflow(BaseWorkflow):
         nx, ny, nz = self.supercell
         frac = self.crack_length_fraction
         ly = ny * 3.165
-        half_w = 0.01 * ly  # thin notch
+        half_w = 0.01 * ly
 
         return (
             f"Create BCC tungsten specimen ({nx}x{ny}x{nz}) for crack propagation.\n"
@@ -91,7 +120,15 @@ class CrackWorkflow(BaseWorkflow):
     def _load_task(self) -> str:
         T = self.config.temperature
         seed = random.randint(10000, 99999)
-        # Mode I loading: pull upper and lower boundaries apart in y-direction.
+
+        if self.dump_every is not None:
+            if self.dump_split:
+                dump_cmd = f"dump 1 all custom {self.dump_every} dump.crack.*.lammpstrj id type x y z"
+            else:
+                dump_cmd = f"dump 1 all custom {self.dump_every} dump.crack.lammpstrj id type x y z"
+        else:
+            dump_cmd = "dump 1 all custom 1000 dump.crack.lammpstrj id type x y z"
+
         return (
             f"read_restart restart.minimized\n"
             f"pair_style eam/alloy, pair_coeff * * W_zhou.eam.alloy W, mass 1 183.84.\n"
@@ -105,7 +142,7 @@ class CrackWorkflow(BaseWorkflow):
             f"thermo_style custom step temp pyy ly pe\n"
             f"thermo 100\n"
             f"Run 50000 steps.\n"
-            f"dump 1 all custom 1000 dump.crack.*.lammpstrj id type x y z\n"
+            f"{dump_cmd}\n"
             f"compute cna all cna/atom 3.5\n"
             f"write_restart restart.loaded"
         )

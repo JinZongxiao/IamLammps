@@ -4,6 +4,60 @@
 
 ---
 
+## [v4.7] — 2026-04-22
+
+### 新增：Nanoindent / Crack / DBTT Workflow 自动报告 + 统一 Dump 单文件策略
+
+**新增文件**
+- `src/lammps_agent/report/base_reporter.py` — 跨 Workflow 公共报告基础设施（稳定性检查、文件清单、JSON/MD 写入、阶段信息提取）
+- `src/lammps_agent/report/nanoindent_reporter.py` — 纳米压痕报告生成器（Oliver-Pharr 结果 + P-h 曲线）
+- `src/lammps_agent/report/crack_reporter.py` — 裂纹扩展报告生成器（脆/韧断裂模式分类 + 应力-步骤曲线）
+- `src/lammps_agent/report/dbtt_reporter.py` — DBTT 温度扫描汇总报告（双面板图 + sigmoid 拟合）
+
+**修改文件**
+- `src/lammps_agent/report/__init__.py` — 导出全部四组 Reporter/Config
+- `src/lammps_agent/workflows/nanoindent.py` — 覆盖 `run()`；新增 `dump_every` / `dump_split=False` 参数
+- `src/lammps_agent/workflows/crack.py` — 覆盖 `run()`；新增 `dump_every` / `dump_split=False` 参数
+- `src/lammps_agent/workflows/dbtt_sweep.py` — 覆盖 `run()`，全温度完成后生成聚合 DBTT 报告
+- `src/lammps_agent/workflows/__init__.py` — `build_workflow()` 向 nanoindent/crack 透传 `dump_every`
+- `src/lammps_agent/main.py` — 统一注入四个 workflow 的 `_report_config`；`payload["report"]` 支持所有 workflow
+
+**各 Workflow 报告产物**
+
+| Workflow | 报告文件 | 额外产物 |
+|----------|----------|----------|
+| nanoindent | `nanoindent_report.md/json` | `indent_ph_curve.png/csv` |
+| crack | `crack_report.md/json` | `crack_curve.png/csv` |
+| dbtt | `dbtt_report.md/json` | `dbtt_summary.png/csv`（写入首个阶段上级目录） |
+
+**Dump 单文件策略**
+- 所有 workflow 默认 `dump_split=False`：轨迹输出到单一文件（如 `dump.crack.lammpstrj`）而非 `dump.crack.*.lammpstrj`（每帧单独文件）
+- 通过 `--dump-every N` CLI 参数控制频率；不指定则不输出 dump（nanoindent/crack）或固定 1000 步
+
+**公共基础设施复用**
+`base_reporter.py` 提供所有 Reporter 共享的逻辑：`run_stability_checks()`、`inventory_files()`、`write_json()`、`write_md()`、`extract_stage_infos()`
+
+**运行命令（生产）**
+```bash
+# Nanoindent
+conda run -n iam-lammps python -m src.lammps_agent.main \
+  --workflow nanoindent --temperature 300 --supercell 20,20,30 \
+  --dump-every 500 --runs-dir /ssd1/jinzongxiao/iam_runs/runs --run
+
+# Crack
+conda run -n iam-lammps python -m src.lammps_agent.main \
+  --workflow crack --temperature 300 --supercell 30,15,5 \
+  --dump-every 500 --runs-dir /ssd1/jinzongxiao/iam_runs/runs --run
+
+# DBTT
+conda run -n iam-lammps python -m src.lammps_agent.main \
+  --workflow dbtt --temperature 300 --supercell 10,10,20 \
+  --equil-steps 20000 --thermo-every 1000 --dump-every 1000 \
+  --runs-dir /ssd1/jinzongxiao/iam_runs/runs --run
+```
+
+---
+
 ## [v4.6] — 2026-04-22
 
 ### 新增：Tensile Workflow 自动科研报告生成 + OVITO 结构演化分析

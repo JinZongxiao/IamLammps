@@ -138,24 +138,51 @@ def _run_workflow(args: argparse.Namespace) -> int:
         dump_every=args.dump_every,
     )
 
-    # Inject report config into tensile workflow so the reporter knows all params
-    if args.workflow == "tensile":
-        try:
-            from .report import TensileReportConfig
+    # Inject report config so each workflow reporter has full CLI params
+    try:
+        from .report import (
+            TensileReportConfig, NanoindentReportConfig,
+            CrackReportConfig, DBTTReportConfig,
+        )
+        _pot = args.potential or "W_Zhou2004_EAM"
+        _lmp = config.lammps_command
+        if args.workflow == "tensile":
             workflow._report_config = TensileReportConfig(
                 supercell=(nx, ny, nz),
                 temperature=args.temperature,
-                potential_name=args.potential or "W_Zhou2004_EAM",
+                potential_name=_pot,
                 equilibration_steps=args.equil_steps if args.equil_steps else wf_config.equilibration_steps,
                 timestep=args.timestep if args.timestep else wf_config.timestep,
                 thermo_every=args.thermo_every if args.thermo_every else wf_config.thermo_every,
                 dump_every=args.dump_every,
                 deform_direction="z",
                 strain_rate=args.strain_rate,
-                lammps_command=config.lammps_command,
+                lammps_command=_lmp,
             )
-        except Exception:
-            pass  # non-critical; reporter will use workflow defaults
+        elif args.workflow == "nanoindent":
+            workflow._report_config = NanoindentReportConfig(
+                supercell=(nx, ny, nz),
+                temperature=args.temperature,
+                potential_name=_pot,
+                lammps_command=_lmp,
+            )
+        elif args.workflow == "crack":
+            workflow._report_config = CrackReportConfig(
+                supercell=(nx, ny, nz),
+                temperature=args.temperature,
+                potential_name=_pot,
+                lammps_command=_lmp,
+            )
+        elif args.workflow == "dbtt":
+            workflow._report_config = DBTTReportConfig(
+                temperatures=workflow.temperatures,
+                supercell=(nx, ny, nz),
+                potential_name=_pot,
+                strain_rate=args.strain_rate,
+                lammps_command=_lmp,
+            )
+    except Exception:
+        pass  # non-critical
 
     pipeline_result = workflow.run()
 
@@ -174,16 +201,30 @@ def _run_workflow(args: argparse.Namespace) -> int:
         ],
     }
 
-    # Report path (tensile only)
-    if args.workflow == "tensile" and pipeline_result.success and pipeline_result.stages:
-        deform_dir = next(
-            (str(o.run_dir) for n, o in pipeline_result.stages if n == "deform"),
-            None,
-        )
-        if deform_dir:
-            from pathlib import Path as _Path
-            rp = _Path(deform_dir) / "tensile_report.md"
-            payload["tensile_report"] = str(rp) if rp.exists() else "未生成"
+    # Append report path to payload
+    if pipeline_result.success:
+        from pathlib import Path as _Path
+        _report_map = {
+            "tensile":     ("deform",  "tensile_report.md"),
+            "nanoindent":  ("indent",  "nanoindent_report.md"),
+            "crack":       ("load",    "crack_report.md"),
+        }
+        if args.workflow in _report_map:
+            stage_key, report_file = _report_map[args.workflow]
+            stage_dir = next(
+                (str(o.run_dir) for n, o in pipeline_result.stages if n == stage_key), None
+            )
+            if stage_dir:
+                rp = _Path(stage_dir) / report_file
+                payload["report"] = str(rp) if rp.exists() else "未生成"
+        elif args.workflow == "dbtt" and pipeline_result.stages:
+            # DBTT report lives one level up from the first deform stage
+            first_deform = next(
+                (str(o.run_dir) for n, o in pipeline_result.stages if n.endswith("_deform")), None
+            )
+            if first_deform:
+                rp = _Path(first_deform).parent / "dbtt_report.md"
+                payload["report"] = str(rp) if rp.exists() else "未生成"
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if pipeline_result.success else 1
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import random
+import sys
 
-from ..pipeline import PipelineStage, SimulationPipeline
+from ..pipeline import PipelineResult, PipelineStage, SimulationPipeline
 from ..potentials import PotentialManager
 from .base import BaseWorkflow, WorkflowConfig
 
@@ -19,11 +20,40 @@ class NanoindentWorkflow(BaseWorkflow):
         supercell: tuple[int, int, int] = (20, 20, 30),
         indenter_radius: float = 30.0,
         indenter_velocity: float = 1e-3,
+        dump_every: int | None = None,
+        dump_split: bool = False,   # False = single-file dump (default)
     ) -> None:
         super().__init__(config, agent)
         self.supercell = supercell
-        self.indenter_radius = indenter_radius  # Angstrom
-        self.indenter_velocity = indenter_velocity  # Angstrom/timestep
+        self.indenter_radius = indenter_radius
+        self.indenter_velocity = indenter_velocity
+        self.dump_every = dump_every if dump_every is not None else config.dump_every
+        self.dump_split = dump_split
+
+    # Report config — set by main.py after construction
+    _report_config: "NanoindentReportConfig | None" = None  # type: ignore[name-defined]
+
+    def run(self) -> PipelineResult:
+        pipeline = self.build_pipeline()
+        result = pipeline.run()
+        if result.success:
+            self._try_generate_report(result)
+        return result
+
+    def _try_generate_report(self, result: PipelineResult) -> None:
+        try:
+            from ..report import NanoindentReporter, NanoindentReportConfig
+            cfg = self._report_config or NanoindentReportConfig(
+                supercell=self.supercell,
+                temperature=self.config.temperature,
+                potential_name=self.config.potential_name,
+                indenter_radius=self.indenter_radius,
+                indenter_velocity=self.indenter_velocity,
+                lammps_command=self.agent.config.lammps_command,
+            )
+            NanoindentReporter(cfg).generate(result)
+        except Exception as exc:
+            print(f"[REPORT WARNING] Nanoindent report failed: {exc}", file=sys.stderr)
 
     def build_pipeline(self) -> SimulationPipeline:
         stages = [
@@ -89,14 +119,19 @@ class NanoindentWorkflow(BaseWorkflow):
         lz = nz * 3.165
         R = self.indenter_radius
         vel = self.indenter_velocity
-        # Indenter starts above the top surface.
         z_top = lz + R + 5.0
-        # Stiffness of indenter.
         K = 10.0  # eV/Angstrom^2
-
-        # Steps to indent ~10% of slab height.
         indent_depth = 0.1 * lz
         nsteps = int(indent_depth / vel)
+
+        # Dump: single-file by default (dump_split=False)
+        if self.dump_every is not None:
+            if self.dump_split:
+                dump_cmd = f"dump 1 all custom {self.dump_every} dump.indent.*.lammpstrj id type x y z"
+            else:
+                dump_cmd = f"dump 1 all custom {self.dump_every} dump.indent.lammpstrj id type x y z"
+        else:
+            dump_cmd = ""
 
         return (
             f"read_restart restart.equilibrate\n"
@@ -114,5 +149,5 @@ class NanoindentWorkflow(BaseWorkflow):
             f"v_indenter_z pe\n"
             f"thermo 100\n"
             f"Run {nsteps} steps.\n"
-            f"dump 1 all custom 2000 dump.indent.*.lammpstrj id type x y z"
+            f"{dump_cmd}"
         )

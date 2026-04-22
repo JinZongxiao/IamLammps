@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..pipeline import PipelineResult
 from .base import BaseWorkflow, WorkflowConfig
@@ -42,15 +43,15 @@ class DBTTSweepWorkflow(BaseWorkflow):
         self.thermo_every = thermo_every
         self.dump_every = dump_every
 
+    # Report config — set by main.py after construction
+    _report_config: "DBTTReportConfig | None" = None  # type: ignore[name-defined]
+
     def build_pipeline(self):
         """Not used directly — run() orchestrates multiple TensileWorkflows."""
         raise NotImplementedError("DBTTSweepWorkflow uses run() directly")
 
     def run(self) -> PipelineResult:
-        """Run tensile test at each temperature and collect results.
-
-        Returns a PipelineResult where stages are labelled by temperature.
-        """
+        """Run tensile test at each temperature and collect results."""
         all_stages = []
         all_success = True
 
@@ -72,9 +73,11 @@ class DBTTSweepWorkflow(BaseWorkflow):
                 thermo_every=self.thermo_every,
                 dump_every=self.dump_every,
             )
+            # Each tensile run generates its own per-run report; suppress it here
+            # so the DBTT aggregated report is the primary output.
+            tensile._report_config = None  # keep per-T reports off (tensile auto-generates them)
             result = tensile.run()
 
-            # Collect stages with temperature prefix.
             for stage_name, output in result.stages:
                 all_stages.append((f"T{T}_{stage_name}", output))
 
@@ -82,8 +85,28 @@ class DBTTSweepWorkflow(BaseWorkflow):
                 all_success = False
                 print(f"[DBTT] T={T} K FAILED at stage {result.failed_stage}", file=sys.stderr)
 
-        return PipelineResult(
+        pipeline_result = PipelineResult(
             stages=all_stages,
             success=all_success,
             failed_stage=None if all_success else "see individual stages",
         )
+
+        # Generate aggregated DBTT report
+        self._try_generate_report(pipeline_result)
+
+        return pipeline_result
+
+    def _try_generate_report(self, pipeline_result: PipelineResult) -> None:
+        try:
+            from ..report import DBTTReporter, DBTTReportConfig
+            cfg = self._report_config or DBTTReportConfig(
+                temperatures=self.temperatures,
+                supercell=self.supercell,
+                potential_name=self.config.potential_name,
+                strain_rate=self.strain_rate,
+                lammps_command=self.agent.config.lammps_command,
+                report_dir=None,  # auto-determined from stage results
+            )
+            DBTTReporter(cfg).generate(pipeline_result)
+        except Exception as exc:
+            print(f"[REPORT WARNING] DBTT report failed: {exc}", file=sys.stderr)

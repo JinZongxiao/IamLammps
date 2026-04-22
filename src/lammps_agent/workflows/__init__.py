@@ -47,9 +47,11 @@ def build_workflow(
             dump_every=dump_every,
         )
     elif name == "nanoindent":
-        return NanoindentWorkflow(config, agent, supercell=supercell)
+        return NanoindentWorkflow(config, agent, supercell=supercell,
+                                  dump_every=dump_every)
     elif name == "crack":
-        return CrackWorkflow(config, agent, supercell=supercell)
+        return CrackWorkflow(config, agent, supercell=supercell,
+                             dump_every=dump_every)
     elif name == "dbtt":
         return DBTTSweepWorkflow(
             config, agent, supercell=supercell, strain_rate=strain_rate,
