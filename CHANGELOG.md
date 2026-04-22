@@ -4,6 +4,53 @@
 
 ---
 
+## [v4.8] — 2026-04-22
+
+### 重构：Crack Workflow 确定性模板化 + Pipeline script_template 旁路机制
+
+**问题**
+
+Crack workflow 的四个 stage（build_crack / minimize / load / analyze）把几何参数描述交给 LLM 翻译成 LAMMPS 脚本，导致三类反复出现的错误：
+
+1. **region 参数含表达式字符串**：LLM 生成 `region upper block INF INF ${yhi}-0.1*${dy} ...`，LAMMPS `region_block.cpp` 要求纯浮点数，遇到表达式直接报 `Expected floating point parameter` 错误。
+2. **minimize 参数不稳定**：LLM 有时生成 4 个参数、有时 5 个，参数顺序/类型也不一致。
+3. **group/region 逻辑在 retry 中漂移**：每次 retry LLM 重新推断 region 边界，引入新的非法写法，越修越偏。
+
+所有这些问题的根因是：**自然语言描述 → LLM 推断 LAMMPS 语法** 这条路在结构化物理量上不可靠，且 retry 机制无法收敛。
+
+**解决方案**
+
+两层修改：
+
+**① `pipeline.py`：新增 `script_template` 旁路**
+
+`PipelineStage` 增加 `script_template: str | None` 字段。当该字段非 `None` 时，`SimulationPipeline._run_template_stage()` 直接把脚本写入文件并执行 LAMMPS，完全跳过 LLM 生成和 retry 逻辑。失败时 fail-fast，并从 stdout 提取 `Last command:` 行打印精确的脚本行号诊断。
+
+**② `crack.py`：四个 stage 全部改为 Python 模板生成**
+
+所有几何量在 Python 层一次性计算为 float 字面量，再通过 f-string 插入 LAMMPS 脚本：
+
+```python
+# 修复前（表达式字符串进入 LAMMPS）
+f"region crack block 0 {frac*nx*3.165:.2f} ..."          # 数值可以
+f"region upper block INF INF ${upper_limit} ${ymax} ..."  # 变量引用 → 错误
+
+# 修复后（Python 预算，float 字面量）
+crack_xhi  = frac * nx * _A0          # Python float
+upper_ylo  = 0.9  * ny * _A0
+f"region upper_grip block INF INF {upper_ylo:.6f} INF INF INF units box"
+```
+
+Potential 绝对路径由 `PotentialManager.resolve_potential()` 一次解析后注入所有 stage 模板，不再依赖 run_dir 内的文件复制。
+
+**修改文件**
+- `src/lammps_agent/pipeline.py` — `PipelineStage.script_template` 字段；`_run_template_stage()`；`_log_template_failure()` 诊断函数
+- `src/lammps_agent/workflows/crack.py` — 完整重写，4 个 stage 全部输出确定性 LAMMPS 脚本
+
+**验证**：smoke test（10×5×3，默认参数）— 4 个 stage 全部通过，所有 retry_count=0。
+
+---
+
 ## [v4.7.1] — 2026-04-22
 
 ### 修复：Nanoindent equilibrate 阶段反复 retry 失败 + `[RETRY N/M]` 显示越界
