@@ -4,6 +4,52 @@
 
 ---
 
+## [v4.7.1] — 2026-04-22
+
+### 修复：Nanoindent equilibrate 阶段反复 retry 失败 + `[RETRY N/M]` 显示越界
+
+**问题一：equilibrate 阶段 100% 重试、始终失败**
+
+`_equilibrate_task()` 只给出自然语言描述（"Re-create the fixed group (bottom 15% of z)"），LLM 在翻译时自行推断，生成了以下非法脚本模式：
+
+```lammps
+compute zcoord all property/atom z
+compute zmin all reduce min c_zcoord   # ← 'reduce' 是合法 style，但放在 run 0 之后无效
+run 0
+variable zmin_val equal c_zmin
+variable zcut equal ${zmin_val}+0.15*(${zmax_val}-${zmin_val})  # ← ${} 展开在 equal-style 里非法
+region fixed_region block INF INF INF INF INF ${zcut}
+```
+
+根因：LAMMPS equal-style variable 不能用 `${var}` 引用另一个 equal-style variable；compute 的标量结果必须通过 `c_name` 引用，而且 `run 0` 必须在 compute 定义**之后**、variable 引用**之前**执行。LLM 每次 retry 都复现同一个错误，无法自愈。
+
+**解决方案：** 将 `_equilibrate_task()` 改为在 Python 层直接计算 `z_fixed = 0.15 * nz * 3.165`，输出含硬编码数值的完整 LAMMPS 命令，不再让 LLM 推断 compute/variable 逻辑：
+
+```lammps
+region fixed_region  block INF INF INF INF INF 4.7475   # Python 预算好的数值
+region thermo_region block INF INF INF INF 4.7475 9.4950
+group fixed_atoms  region fixed_region
+...
+```
+
+---
+
+**问题二：`[RETRY 4/3]` 显示越界**
+
+`for attempt in range(max_retries + 1)` 中，最后一次循环（`attempt == max_retries == 3`）失败后仍调用 `_log_retry(attempt + 1, ...)` 打印 `[RETRY 4/3]`。此时已无下一次重试，该日志没有意义且数字越界。
+
+**解决方案：** 在 `_log_retry` / `_log_retry_unknown` 调用处增加 `if attempt < max_retries` 判断，最后一次失败只记录错误上下文，不再打印 retry 日志。
+
+---
+
+**修改文件**
+- `src/lammps_agent/workflows/nanoindent.py` — `_equilibrate_task()` 改为硬编码 z 边界值
+- `src/lammps_agent/agent.py` — retry 日志只在 `attempt < max_retries` 时打印
+
+**验证**：smoke test（5×5×10，equil 500步）三阶段全部通过，equilibrate 阶段 retry=0。
+
+---
+
 ## [v4.7] — 2026-04-22
 
 ### 新增：Nanoindent / Crack / DBTT Workflow 自动报告 + 统一 Dump 单文件策略
