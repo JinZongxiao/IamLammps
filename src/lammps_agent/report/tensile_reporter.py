@@ -304,8 +304,8 @@ class TensileReporter:
                 max_strain=d.get("max_strain"),
                 data_points=d.get("data_points", 0),
                 deform_direction_note=(
-                    f"拉伸方向 {self.config.deform_direction.upper()} 轴，"
-                    f"应力分量 P{self.config.deform_direction.lower()}{self.config.deform_direction.lower()}"
+                    f"Tensile axis {self.config.deform_direction.upper()}, "
+                    f"stress component P{self.config.deform_direction.lower()}{self.config.deform_direction.lower()}"
                 ),
             )
             # Detect post-peak softening
@@ -417,7 +417,7 @@ class TensileReporter:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(figsize=(8, 5))
-            ax.plot(strain_arr * 100, stress_arr, color="#1f77b4", lw=1.5, label="应力-应变")
+            ax.plot(strain_arr * 100, stress_arr, color="#1f77b4", lw=1.5, label="Stress-Strain")
 
             # Mark yield point
             if youngs_modulus is not None and youngs_modulus > 0 and yield_strength is not None:
