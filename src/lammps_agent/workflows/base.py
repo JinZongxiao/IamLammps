@@ -14,6 +14,11 @@ class WorkflowConfig:
     potential_name: str = "W_Zhou2004_EAM"
     mpi_np: int | None = None
     timeout_per_stage: int | None = None
+    # Production parameters for large-scale runs (backward compatible defaults)
+    equilibration_steps: int = 20000
+    timestep: float = 0.001
+    thermo_every: int = 100
+    dump_every: int | None = None  # None = no dump by default
 
 
 class BaseWorkflow(ABC):

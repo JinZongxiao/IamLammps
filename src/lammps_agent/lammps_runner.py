@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, asdict, field
@@ -33,7 +34,9 @@ def run_lammps(
     cmd: list[str] = []
     if mpi_np is not None and mpi_np > 1:
         cmd = ["mpirun", "-np", str(mpi_np)]
-    cmd.extend([command, "-in", str(input_file)])
+    # Split command string into list of arguments (e.g., "lmp -k on -sf kk" -> ["lmp", "-k", "on", "-sf", "kk"])
+    cmd.extend(shlex.split(command))
+    cmd.extend(["-in", str(input_file)])
 
     # Snapshot existing files so we can detect new outputs.
     files_before = set(os.listdir(work_dir))

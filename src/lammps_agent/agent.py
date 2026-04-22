@@ -76,7 +76,8 @@ class LammpsAgent:
     def __init__(self, config: AgentConfig, runs_root: Path | None = None) -> None:
         self.config = config
         self.client = build_chat_client(config)
-        self.runs_root = runs_root or Path("runs")
+        # Use runs_root if provided, else use config.runs_dir (which can be set via RUNS_DIR env var)
+        self.runs_root = runs_root or Path(config.runs_dir)
         self.memory_store = SimulationMemoryStore(
             memory_file=Path(config.memory_file),
             max_entries=config.memory_max_entries,
@@ -86,6 +87,36 @@ class LammpsAgent:
     def generate_input_script(
         self, task: str, error_context: str = ""
     ) -> str:
+        compressed_context = self.memory_store.compressed_context(
+            max_chars=self.config.memory_context_chars
+        )
+        user_prompt = self._build_user_prompt(task, compressed_context, error_context)
+        messages = [
+            ChatMessage(role="system", content=SYSTEM_PROMPT),
+            ChatMessage(role="user", content=user_prompt),
+        ]
+        text = self.client.chat(messages)
+        return self._extract_script(text)
+
+    def generate_with_fix_lookup(
+        self, task: str, error_context: str = "", error_type: str | None = None
+    ) -> str:
+        """Generate script, first trying to apply known fixes from memory.
+
+        For builtin workflows with previously seen errors, apply the known fix
+        directly instead of regenerating and re-running LAMMPS.
+        """
+        is_builtin, workflow = self._is_builtin_workflow(task)
+        if is_builtin and error_type:
+            stage = self._infer_stage_from_task(task)
+            fix_path = self._lookup_fix(workflow, stage, error_type)
+            if fix_path:
+                # Found a known fix - read and apply it
+                fix_script = Path(fix_path).read_text(encoding="utf-8", errors="ignore")
+                sys.stderr.write(f"[APPLYING KNOWN FIX] Using saved fix from {fix_path}\n")
+                return fix_script
+
+        # No known fix available - fall back to LLM generation
         compressed_context = self.memory_store.compressed_context(
             max_chars=self.config.memory_context_chars
         )
@@ -109,6 +140,7 @@ class LammpsAgent:
         max_retries = self.config.max_retries
 
         error_context = ""
+        error_type: str | None = None
         error_history: list[LammpsError] = []
         result: LammpsRunResult | None = None
         skill_reports: list[SkillReport] = []
@@ -116,7 +148,11 @@ class LammpsAgent:
         retry_count = 0
 
         for attempt in range(max_retries + 1):
-            input_text = self.generate_input_script(task, error_context)
+            # For retries, try to apply known fixes first to avoid re-running LAMMPS
+            if attempt > 0:
+                input_text = self.generate_with_fix_lookup(task, error_context, error_type)
+            else:
+                input_text = self.generate_input_script(task, error_context)
             # Save each attempt with a suffix so we can inspect the history.
             if attempt == 0:
                 input_path.write_text(input_text, encoding="utf-8")
@@ -153,12 +189,14 @@ class LammpsAgent:
             error = parse_lammps_error(stdout_text, stderr_text)
 
             if error is not None:
+                error_type = error.error_type  # Save for next retry
                 error_history.append(error)
                 _log_retry(attempt + 1, max_retries, error)
                 error_context = self._build_error_context(
                     attempt + 1, input_text, error
                 )
             else:
+                error_type = None
                 _log_retry_unknown(attempt + 1, max_retries, stdout_text, stderr_text)
                 error_context = (
                     f"Attempt {attempt + 1} failed (return code {result.return_code}) "
@@ -198,6 +236,13 @@ class LammpsAgent:
                 error_type=last_error_type,
                 retry_count=retry_count,
                 script_hash=script_hash,
+                # New fields for failure learning
+                workflow=self._is_builtin_workflow(task)[1] if self._is_builtin_workflow(task)[0] else None,
+                stage=last_error_type if last_error_type else None,
+                fixed_script_path=None,
+                patch_summary=None,
+                fix_success=True if result and result.return_code == 0 else None,
+                root_cause_line=None,
             )
         )
 
@@ -261,6 +306,59 @@ class LammpsAgent:
                 "and improve script quality.\n" + compressed_context
             )
         return "\n\n".join(parts)
+
+    def _is_builtin_workflow(self, task: str) -> tuple[bool, str | None]:
+        """Check if task describes a builtin workflow (tensile, dbtt)."""
+        task_lower = task.lower()
+        if "tensile" in task_lower or "stretch" in task_lower or "deform" in task_lower:
+            return True, "tensile"
+        elif "dbtt" in task_lower or "ductile" in task_lower:
+            return True, "dbtt"
+        return False, None
+
+    @staticmethod
+    def _infer_stage_from_task(task: str) -> str:
+        """Infer stage name from task description for builtin workflows."""
+        task_lower = task.lower()
+        if "minim" in task_lower:
+            return "minimize"
+        elif "equilibrat" in task_lower or "npt" in task_lower or "equilibrium" in task_lower:
+            return "equilibrate"
+        elif "deform" in task_lower or "tensile" in task_lower or "uniaxial" in task_lower:
+            return "deform"
+        return "unknown"
+
+    def _lookup_fix(
+        self, workflow: str | None, stage: str | None, error_type: str
+    ) -> str | None:
+        """Look up a previously successful fix for (workflow, stage, error_type)."""
+        if workflow is None or stage is None or error_type is None:
+            return None
+
+        entries = self.memory_store.load_recent(limit=200)
+        for entry in reversed(entries):
+            if (
+                entry.workflow == workflow and
+                entry.stage == stage and
+                entry.error_type == error_type and
+                entry.fix_success is True and
+                entry.fixed_script_path is not None
+            ):
+                return str(entry.fixed_script_path)
+        return None
+
+    @staticmethod
+    def _infer_error_type(error: LammpsError) -> str:
+        """Infer error type from LAMMPS error message."""
+        msg = error.raw_message.upper()
+        if "UNITS COMMAND" in msg and "SIMULATION BOX" in msg:
+            return "units_after_box"
+        elif "QUOTE NOT FOLLOWED" in msg:
+            return "quote_error"
+        elif "ERROR: Input line" in msg:
+            return "input_syntax"
+        else:
+            return "unknown"
 
     @staticmethod
     def _build_error_context(

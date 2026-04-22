@@ -45,6 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--supercell", type=str, default="10,10,20", help="Supercell nx,ny,nz")
     parser.add_argument("--strain-rate", type=float, default=1e8, help="Strain rate for tensile (/s)")
 
+    # --- Production parameters (optional, defaults preserved) ---
+    parser.add_argument("--runs-dir", type=str, default=None, help="Output directory for runs (overrides RUNS_DIR env var)")
+    parser.add_argument("--equil-steps", type=int, default=None, help="Equilibration steps (default 20000)")
+    parser.add_argument("--timestep", type=float, default=None, help="Timestep in ps (default 0.001)")
+    parser.add_argument("--thermo-every", type=int, default=None, help="Output thermo every N steps (default 100)")
+    parser.add_argument("--dump-every", type=int, default=None, help="Dump atoms every N steps (default: no dump)")
+
     # --- Runner options ---
     parser.add_argument("--mpi-np", type=int, default=None, help="Number of MPI processes")
     parser.add_argument("--timeout", type=int, default=None, help="Timeout per stage in seconds")
@@ -101,23 +108,55 @@ def _run_workflow(args: argparse.Namespace) -> int:
     if args.timeout is not None:
         config.lammps_timeout = args.timeout
 
-    agent = LammpsAgent(config)
-
-    nx, ny, nz = (int(x) for x in args.supercell.split(","))
+    # Apply production parameters to WorkflowConfig
     wf_config = WorkflowConfig(
         temperature=args.temperature,
         potential_name=args.potential or "W_Zhou2004_EAM",
         mpi_np=args.mpi_np,
         timeout_per_stage=args.timeout,
+        equilibration_steps=args.equil_steps if args.equil_steps else None,
+        timestep=args.timestep,
+        thermo_every=args.thermo_every,
+        dump_every=args.dump_every,
     )
 
+    # Apply runs_dir to agent if specified
+    from pathlib import Path
+    runs_root = Path(args.runs_dir) if args.runs_dir else None
+    agent = LammpsAgent(config, runs_root=runs_root)
+
+    nx, ny, nz = (int(x) for x in args.supercell.split(","))
     workflow = build_workflow(
         name=args.workflow,
         config=wf_config,
         agent=agent,
         supercell=(nx, ny, nz),
         strain_rate=args.strain_rate,
+        equilibration_steps=args.equil_steps,
+        timestep=args.timestep,
+        thermo_every=args.thermo_every,
+        dump_every=args.dump_every,
     )
+
+    # Inject report config into tensile workflow so the reporter knows all params
+    if args.workflow == "tensile":
+        try:
+            from .report import TensileReportConfig
+            workflow._report_config = TensileReportConfig(
+                supercell=(nx, ny, nz),
+                temperature=args.temperature,
+                potential_name=args.potential or "W_Zhou2004_EAM",
+                equilibration_steps=args.equil_steps if args.equil_steps else wf_config.equilibration_steps,
+                timestep=args.timestep if args.timestep else wf_config.timestep,
+                thermo_every=args.thermo_every if args.thermo_every else wf_config.thermo_every,
+                dump_every=args.dump_every,
+                deform_direction="z",
+                strain_rate=args.strain_rate,
+                lammps_command=config.lammps_command,
+            )
+        except Exception:
+            pass  # non-critical; reporter will use workflow defaults
+
     pipeline_result = workflow.run()
 
     payload = {
@@ -134,6 +173,17 @@ def _run_workflow(args: argparse.Namespace) -> int:
             for name, output in pipeline_result.stages
         ],
     }
+
+    # Report path (tensile only)
+    if args.workflow == "tensile" and pipeline_result.success and pipeline_result.stages:
+        deform_dir = next(
+            (str(o.run_dir) for n, o in pipeline_result.stages if n == "deform"),
+            None,
+        )
+        if deform_dir:
+            from pathlib import Path as _Path
+            rp = _Path(deform_dir) / "tensile_report.md"
+            payload["tensile_report"] = str(rp) if rp.exists() else "未生成"
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if pipeline_result.success else 1
 

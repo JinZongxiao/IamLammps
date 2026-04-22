@@ -33,6 +33,8 @@ class AgentConfig:
     potentials_dir: str | None = None
     # --- Backend abstraction ---
     backend: str = "local"  # "local" | "slurm"
+    # --- Directory configuration ---
+    runs_dir: str = "runs"  # Output directory for runs (can be overridden via RUNS_DIR env var)
 
 
 def load_config() -> AgentConfig:
@@ -61,4 +63,5 @@ def load_config() -> AgentConfig:
         mpi_np=_parse_optional_int(os.getenv("MPI_NP")),
         potentials_dir=os.getenv("LAMMPS_POTENTIALS_DIR", "").strip() or None,
         backend=os.getenv("BACKEND", "local").strip(),
+        runs_dir=os.getenv("RUNS_DIR", "runs").strip(),
     )

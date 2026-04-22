@@ -18,6 +18,13 @@ class SimulationMemoryEntry:
     error_type: str | None = None
     retry_count: int = 0
     script_hash: str | None = None
+    # --- Failure learning fields ---
+    workflow: str | None = None
+    stage: str | None = None
+    fixed_script_path: str | None = None
+    patch_summary: str | None = None
+    fix_success: bool | None = None
+    root_cause_line: int | None = None
 
 
 class SimulationMemoryStore:
@@ -106,6 +113,12 @@ class SimulationMemoryStore:
         error_type: str | None = None,
         retry_count: int = 0,
         script_hash: str | None = None,
+        workflow: str | None = None,
+        stage: str | None = None,
+        fixed_script_path: str | None = None,
+        patch_summary: str | None = None,
+        fix_success: bool | None = None,
+        root_cause_line: int | None = None,
     ) -> SimulationMemoryEntry:
         return SimulationMemoryEntry(
             timestamp=datetime.now().isoformat(timespec="seconds"),
@@ -117,6 +130,12 @@ class SimulationMemoryStore:
             error_type=error_type,
             retry_count=retry_count,
             script_hash=script_hash,
+            workflow=workflow,
+            stage=stage,
+            fixed_script_path=fixed_script_path,
+            patch_summary=patch_summary,
+            fix_success=fix_success,
+            root_cause_line=root_cause_line,
         )
 
     @staticmethod

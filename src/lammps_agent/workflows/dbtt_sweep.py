@@ -27,11 +27,20 @@ class DBTTSweepWorkflow(BaseWorkflow):
         temperatures: list[float] | None = None,
         supercell: tuple[int, int, int] = (10, 10, 20),
         strain_rate: float = 1e8,
+        # Production parameters (passed through to TensileWorkflow)
+        equilibration_steps: int | None = None,
+        timestep: float | None = None,
+        thermo_every: int | None = None,
+        dump_every: int | None = None,
     ) -> None:
         super().__init__(config, agent)
         self.temperatures = temperatures or list(range(200, 1300, 100))
         self.supercell = supercell
         self.strain_rate = strain_rate
+        self.equilibration_steps = equilibration_steps
+        self.timestep = timestep
+        self.thermo_every = thermo_every
+        self.dump_every = dump_every
 
     def build_pipeline(self):
         """Not used directly — run() orchestrates multiple TensileWorkflows."""
@@ -58,6 +67,10 @@ class DBTTSweepWorkflow(BaseWorkflow):
                 agent=self.agent,
                 supercell=self.supercell,
                 strain_rate=self.strain_rate,
+                equilibration_steps=self.equilibration_steps,
+                timestep=self.timestep,
+                thermo_every=self.thermo_every,
+                dump_every=self.dump_every,
             )
             result = tensile.run()
 

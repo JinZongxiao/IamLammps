@@ -29,18 +29,35 @@ def build_workflow(
     agent: "LammpsAgent",  # noqa: F821
     supercell: tuple[int, int, int] = (10, 10, 20),
     strain_rate: float = 1e8,
+    # Production parameters (passed through to applicable workflows)
+    equilibration_steps: int | None = None,
+    timestep: float | None = None,
+    thermo_every: int | None = None,
+    dump_every: int | None = None,
 ) -> BaseWorkflow:
     """Factory: create a workflow by name."""
     from ..agent import LammpsAgent  # avoid circular
 
     if name == "tensile":
-        return TensileWorkflow(config, agent, supercell=supercell, strain_rate=strain_rate)
+        return TensileWorkflow(
+            config, agent, supercell=supercell, strain_rate=strain_rate,
+            equilibration_steps=equilibration_steps,
+            timestep=timestep,
+            thermo_every=thermo_every,
+            dump_every=dump_every,
+        )
     elif name == "nanoindent":
         return NanoindentWorkflow(config, agent, supercell=supercell)
     elif name == "crack":
         return CrackWorkflow(config, agent, supercell=supercell)
     elif name == "dbtt":
-        return DBTTSweepWorkflow(config, agent, supercell=supercell, strain_rate=strain_rate)
+        return DBTTSweepWorkflow(
+            config, agent, supercell=supercell, strain_rate=strain_rate,
+            equilibration_steps=equilibration_steps,
+            timestep=timestep,
+            thermo_every=thermo_every,
+            dump_every=dump_every,
+        )
     elif name == "interface":
         return InterfaceMechanicsWorkflow(config, agent, supercell=supercell)
     elif name == "he_trapping":
