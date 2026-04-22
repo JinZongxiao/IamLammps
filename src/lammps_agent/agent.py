@@ -191,13 +191,15 @@ class LammpsAgent:
             if error is not None:
                 error_type = error.error_type  # Save for next retry
                 error_history.append(error)
-                _log_retry(attempt + 1, max_retries, error)
+                if attempt < max_retries:
+                    _log_retry(attempt + 1, max_retries, error)
                 error_context = self._build_error_context(
                     attempt + 1, input_text, error
                 )
             else:
                 error_type = None
-                _log_retry_unknown(attempt + 1, max_retries, stdout_text, stderr_text)
+                if attempt < max_retries:
+                    _log_retry_unknown(attempt + 1, max_retries, stdout_text, stderr_text)
                 error_context = (
                     f"Attempt {attempt + 1} failed (return code {result.return_code}) "
                     "but the error could not be parsed. Review the script carefully."

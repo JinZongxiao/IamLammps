@@ -102,14 +102,35 @@ class NanoindentWorkflow(BaseWorkflow):
     def _equilibrate_task(self) -> str:
         T = self.config.temperature
         seed = random.randint(10000, 99999)
+        nx, ny, nz = self.supercell
+        lz = nz * 3.165
+        z_fixed = 0.15 * lz   # bottom 15 % of slab height
+        z_thermo = 0.30 * lz  # next 15 % (15 %–30 %)
         return (
             f"read_restart restart.minimize\n"
-            f"pair_style eam/alloy, pair_coeff * * W_zhou.eam.alloy W, mass 1 183.84.\n"
-            f"Re-create the fixed group (bottom 15% of z) and mobile group.\n"
-            f"Fix the bottom layer: fix freeze fixed_atoms setforce 0 0 0\n"
+            f"pair_style eam/alloy\n"
+            f"pair_coeff * * W_zhou.eam.alloy W\n"
+            f"mass 1 183.84\n"
+            f"\n"
+            f"# Re-create groups using hard-coded z boundaries\n"
+            f"# (compute/reduce cannot be used before run 0 for region definitions)\n"
+            f"region fixed_region  block INF INF INF INF INF {z_fixed:.4f}\n"
+            f"region thermo_region block INF INF INF INF {z_fixed:.4f} {z_thermo:.4f}\n"
+            f"group fixed_atoms  region fixed_region\n"
+            f"group thermo_atoms region thermo_region\n"
+            f"group mobile_atoms subtract all fixed_atoms\n"
+            f"\n"
+            f"fix freeze  fixed_atoms  setforce 0 0 0\n"
             f"velocity mobile_atoms create {T} {seed} dist gaussian\n"
-            f"Equilibrate mobile atoms with NVT at {T} K for 10000 steps.\n"
-            f"timestep 0.001, thermo 100.\n"
+            f"\n"
+            f"fix nvt_eq thermo_atoms nvt temp {T} {T} 0.1\n"
+            f"fix nve_eq mobile_atoms nve\n"
+            f"\n"
+            f"timestep 0.001\n"
+            f"thermo 100\n"
+            f"thermo_style custom step temp pe ke etotal press\n"
+            f"run 10000\n"
+            f"\n"
             f"write_restart restart.equilibrate"
         )
 
