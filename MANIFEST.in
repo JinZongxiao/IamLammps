@@ -1,0 +1,6 @@
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include SECURITY.md
+recursive-include docs/assets *.png
+recursive-include src/lammps_agent/resources *

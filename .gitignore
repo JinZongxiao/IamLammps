@@ -14,16 +14,25 @@ ENV/
 
 # Environment variables (may contain API keys)
 .env
+.iamlammps_history
+/.iamlammps/mcp.json
+/.iamlammps/state/
 
 # IDE
 .vscode/
 .idea/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.swp
 *.swo
 *~
 
 # LAMMPS run outputs
-runs/
+/runs/
 log.lammps
 
 # OS

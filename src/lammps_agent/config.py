@@ -19,20 +19,26 @@ class AgentConfig:
     openai_base_url: str
     openai_api_key: str
     openai_model: str
-    local_base_url: str
-    local_model: str
     lammps_command: str
-    enabled_skills: list[str]
-    memory_file: str
-    memory_max_entries: int
-    memory_context_chars: int
-    max_retries: int
-    # --- Phase B additions ---
+    enabled_analyzers: list[str]
     lammps_timeout: int | None = None
     mpi_np: int | None = None
     potentials_dir: str | None = None
-    # --- Backend abstraction ---
-    backend: str = "local"  # "local" | "slurm"
+    reasoning_effort: str = "medium"
+    openai_tracing: bool = True
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-v4-flash"
+
+def _parse_bool(value: str | None, default: bool) -> bool:
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value!r}")
 
 
 def load_config() -> AgentConfig:
@@ -41,24 +47,28 @@ def load_config() -> AgentConfig:
     if not Path(".env").exists() and Path(".env.example").exists():
         load_dotenv(dotenv_path=Path(".env.example"), override=False)
 
-    raw_skills = os.getenv("ENABLED_SKILLS", "thermo_tail,convergence,thermo_validator").strip()
-    enabled_skills = [s.strip() for s in raw_skills.split(",") if s.strip()]
+    raw_analyzers = os.getenv(
+        "ENABLED_ANALYZERS", "thermo_tail,convergence,thermo_validator"
+    ).strip()
+    enabled_analyzers = [
+        name.strip() for name in raw_analyzers.split(",") if name.strip()
+    ]
 
     return AgentConfig(
-        llm_provider=os.getenv("LLM_PROVIDER", "openai_compatible").strip(),
+        llm_provider=os.getenv("LLM_PROVIDER", "openai_agents").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip(),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip(),
-        local_base_url=os.getenv("LOCAL_BASE_URL", "http://127.0.0.1:11434").strip(),
-        local_model=os.getenv("LOCAL_MODEL", "qwen2.5:7b").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "").strip(),
         lammps_command=os.getenv("LAMMPS_COMMAND", "lmp_mpi").strip(),
-        enabled_skills=enabled_skills,
-        memory_file=os.getenv("MEMORY_FILE", "runs/simulation_memory.jsonl").strip(),
-        memory_max_entries=int(os.getenv("MEMORY_MAX_ENTRIES", "200").strip()),
-        memory_context_chars=int(os.getenv("MEMORY_CONTEXT_CHARS", "2400").strip()),
-        max_retries=int(os.getenv("MAX_RETRIES", "3").strip()),
+        enabled_analyzers=enabled_analyzers,
         lammps_timeout=_parse_optional_int(os.getenv("LAMMPS_TIMEOUT")),
         mpi_np=_parse_optional_int(os.getenv("MPI_NP")),
         potentials_dir=os.getenv("LAMMPS_POTENTIALS_DIR", "").strip() or None,
-        backend=os.getenv("BACKEND", "local").strip(),
+        reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "medium").strip(),
+        openai_tracing=_parse_bool(os.getenv("OPENAI_TRACING"), True),
+        deepseek_base_url=os.getenv(
+            "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+        ).strip(),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
+        deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip(),
     )

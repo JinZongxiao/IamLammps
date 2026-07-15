@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "materials-search": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["your-materials-mcp-server"],
+      "allowed_tools": ["search_materials", "get_material"],
+      "approval": "always"
+    }
+  }
+}

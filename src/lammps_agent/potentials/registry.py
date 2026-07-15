@@ -23,9 +23,9 @@ class PotentialEntry:
 class PotentialRegistry:
     """Registry of available interatomic potentials."""
 
-    def __init__(self) -> None:
+    def __init__(self, potentials_dir: str | Path | None = None) -> None:
         self._entries: dict[str, PotentialEntry] = {}
-        self._register_builtin()
+        self._register_builtin(Path(potentials_dir) if potentials_dir else None)
 
     # ------------------------------------------------------------------
     # Public API
@@ -49,8 +49,8 @@ class PotentialRegistry:
     # Built-in potentials
     # ------------------------------------------------------------------
 
-    def _register_builtin(self) -> None:
-        pot_dir = self._discover_lammps_potentials_dir()
+    def _register_builtin(self, configured_dir: Path | None = None) -> None:
+        pot_dir = configured_dir or self._discover_lammps_potentials_dir()
         if pot_dir is None:
             return
 
@@ -78,7 +78,7 @@ class PotentialRegistry:
 
         Strategy:
         1. ``LAMMPS_POTENTIALS_DIR`` environment variable.
-        2. Relative to ``lmp_mpi`` binary: ``$(dirname $(which lmp_mpi))/../share/lammps/potentials``.
+        2. Relative to the ``lmp_mpi`` binary under ``../share/lammps/potentials``.
         3. Common Homebrew path (macOS).
         """
         import os

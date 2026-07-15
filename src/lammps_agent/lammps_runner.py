@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -25,9 +26,17 @@ def run_lammps(
     work_dir: Path,
     timeout: int | None = None,
     mpi_np: int | None = None,
+    *,
+    output_dir: Path | None = None,
+    persist_result: bool = True,
+    environment: dict[str, str] | None = None,
 ) -> LammpsRunResult:
-    stdout_path = work_dir / "stdout.log"
-    stderr_path = work_dir / "stderr.log"
+    work_dir = work_dir.resolve(strict=True)
+    output_dir = work_dir if output_dir is None else output_dir.resolve(strict=True)
+    if environment is None:
+        environment = _minimal_environment()
+    stdout_path = output_dir / "stdout.log"
+    stderr_path = output_dir / "stderr.log"
 
     input_file = input_file.resolve()
     cmd: list[str] = []
@@ -35,30 +44,42 @@ def run_lammps(
         cmd = ["mpirun", "-np", str(mpi_np)]
     cmd.extend([command, "-in", str(input_file)])
 
-    # Snapshot existing files so we can detect new outputs.
-    files_before = set(os.listdir(work_dir))
+    files_before = _relative_files(work_dir)
 
     timed_out = False
     t0 = time.monotonic()
 
-    with stdout_path.open("w", encoding="utf-8") as out, stderr_path.open(
-        "w", encoding="utf-8"
-    ) as err:
+    with _open_log(stdout_path) as out, _open_log(stderr_path) as err:
         try:
-            process = subprocess.run(
-                cmd, stdout=out, stderr=err, cwd=work_dir, check=False,
-                timeout=timeout,
+            process = subprocess.Popen(
+                cmd,
+                stdout=out,
+                stderr=err,
+                cwd=work_dir,
+                start_new_session=True,
+                env=environment,
             )
-            returncode = process.returncode
+            try:
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(process)
+                raise
         except subprocess.TimeoutExpired:
             timed_out = True
             returncode = -1
+        except KeyboardInterrupt:
+            _terminate_process_group(process)
+            raise
 
     wall_time = time.monotonic() - t0
 
-    # Detect new output files (dump, restart, data, etc.).
-    files_after = set(os.listdir(work_dir))
-    new_files = sorted(files_after - files_before - {"stdout.log", "stderr.log", "result.json"})
+    files_after = _relative_files(work_dir)
+    own_outputs = {
+        path.relative_to(work_dir).as_posix()
+        for path in (stdout_path, stderr_path)
+        if path.is_relative_to(work_dir)
+    }
+    new_files = sorted(files_after - files_before - own_outputs - {"result.json"})
 
     result = LammpsRunResult(
         command=cmd,
@@ -70,7 +91,60 @@ def run_lammps(
         output_files=new_files,
     )
 
-    with (work_dir / "result.json").open("w", encoding="utf-8") as f:
-        json.dump(asdict(result), f, indent=2, ensure_ascii=False)
+    if persist_result:
+        with (output_dir / "result.json").open("w", encoding="utf-8") as f:
+            json.dump(asdict(result), f, indent=2, ensure_ascii=False)
 
     return result
+
+
+def _relative_files(directory: Path) -> set[str]:
+    """Return regular files below *directory* without traversing symlinks."""
+    files: set[str] = set()
+    for current, directory_names, file_names in os.walk(directory, followlinks=False):
+        directory_names[:] = [
+            name for name in directory_names if not Path(current, name).is_symlink()
+        ]
+        for name in file_names:
+            path = Path(current, name)
+            if path.is_file() and not path.is_symlink():
+                files.add(path.relative_to(directory).as_posix())
+    return files
+
+
+def _open_log(path: Path):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    return os.fdopen(descriptor, "w", encoding="utf-8")
+
+
+def _minimal_environment() -> dict[str, str]:
+    allowed = {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "OMP_NUM_THREADS",
+    }
+    return {key: value for key, value in os.environ.items() if key in allowed}
+
+
+def _terminate_process_group(process: subprocess.Popen) -> None:
+    """Terminate the whole MPI/LAMMPS process group, escalating if needed."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=3)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()

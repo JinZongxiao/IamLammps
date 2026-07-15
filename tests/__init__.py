@@ -1,0 +1,1 @@
+"""IamLAMMPS test suite."""

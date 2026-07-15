@@ -1,5 +1,16 @@
-"""LAMMPS agent package."""
+"""IamLAMMPS simulation coding agent."""
 
-from .agent import LammpsAgent
+from typing import TYPE_CHECKING
 
-__all__ = ["LammpsAgent"]
+if TYPE_CHECKING:
+    from .simulation_agent import SimulationCodingAgent
+
+__all__ = ["SimulationCodingAgent"]
+
+
+def __getattr__(name: str):
+    if name == "SimulationCodingAgent":
+        from .simulation_agent import SimulationCodingAgent
+
+        return SimulationCodingAgent
+    raise AttributeError(name)

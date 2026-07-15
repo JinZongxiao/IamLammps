@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Sample LAMMPS thermo output for a successful LJ NVT run.
 SAMPLE_THERMO_OUTPUT = """\

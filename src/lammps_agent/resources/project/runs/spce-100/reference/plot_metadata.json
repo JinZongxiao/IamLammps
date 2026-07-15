@@ -1,0 +1,10 @@
+{
+  "sample": "spce-100",
+  "purpose": "deterministic parser and plotting fixture",
+  "source_run_id": "packaged-reference-only",
+  "plot_types": ["thermo", "rdf_oo"],
+  "expected_format": "png",
+  "minimum_width_px": 640,
+  "minimum_height_px": 480,
+  "scientific_status": "The 5000-step sample is a fast CI check. These compact golden values are test fixtures and are not evidence of converged RDF, density, or thermodynamic properties."
+}
